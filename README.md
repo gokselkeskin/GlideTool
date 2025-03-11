@@ -4,6 +4,8 @@ heatmap.py creates a heatmap of loss in the CDb and CDpro space and shows the li
 
 best_glide_curve_fits.py shows the glide polars created by CDb and CDpro parameter pairs on the linear fit.
 
+general_fit.py is calculating general fits based on selected species (8 species). 
+
 GlideTool.exe is an installer file that generates outputs based on user input and stores our dataset of birds.
 
 GlideTool.py is the source code of GlideTool.exe.
