@@ -1,3 +1,5 @@
+Please download the full depository, otherwise the .exe file will not work. 
+
 The species_dict.pkl file contains all data necessary for heatmap.py, best_glide_curve_fits.py, and general_fit.py.  
 
 heatmap.py creates a heatmap of loss in the CDb and CDpro space and shows the linear fit in the minimum loss region.
