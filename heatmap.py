@@ -13,6 +13,13 @@ from collections import defaultdict
 from scipy.optimize import curve_fit
 import csv
 
+
+def get_row_idx(value, yvals):
+    return (np.abs(yvals - value)).argmin()
+
+def get_col_idx(value, xvals):
+    return (np.abs(xvals - value)).argmin()
+
 def linear_func(x, a, b):
     return a * x + b
 
@@ -75,23 +82,22 @@ def Vz_pennycuick(Vt, m, g, rho, Sb, Sw, B, Cdpro=0.014, Cdb=0.1, delta=1, e=1):
     return value
 
 
-with open('species_dict.pkl', 'rb') as f:
+with open('individuals.pkl', 'rb') as f:
     full_objective = pickle.load(f)
     #objective = pickle.load(f)
 
 ####################### Choose the species or load the full data#################
 
-keys_to_copy = ["Fn"]
-objective = {key: full_objective[key] for key in keys_to_copy}
+#keys_to_copy = ["Fn"]
+#objective = {key: full_objective[key] for key in keys_to_copy}
 
-#objective = full_objective
+objective = full_objective
 
 
 baseline_parameters = {'Cdb': 0.1, 'Cdpro': 0.014}
 
 CDBmin = 0.1
 CDBmax = 0.3
-
 
 CDpromin = 0.001
 #CDpromin = 0
@@ -240,19 +246,22 @@ for bird, data in grid_results.items():
                                   (heatmap_data.index.max() - heatmap_data.index.min())
                           ) * len(heatmap_data.index)
 
-    specific_x_labels = {0.001, 0.09}
-    specific_y_labels = {0.10, 0.30}
+    desired_cdb = [0.10, 0.15, 0.20, 0.25, 0.30]
+    desired_cdpro = [0.001,0.01, 0.02, 0.03, 0.04,0.05, 0.06,0.07, 0.08,0.09, 0.10]
 
-    x_labels = [f"{heatmap_data.columns[int(tick)]:.3f}" if round(float(heatmap_data.columns[int(tick)]),
-                                                                  3) in specific_x_labels
-                else "" for tick in x_ticks if int(tick) < len(heatmap_data.columns)]
-    ax.set_xticklabels(x_labels)
+    xvals = heatmap_data.columns.values
+    yvals = heatmap_data.index.values
 
-    y_labels = [
-        f"{heatmap_data.index[int(tick)]:.2f}" if round(float(heatmap_data.index[int(tick)]), 2) in specific_y_labels
-        else "" for tick in y_ticks if int(tick) < len(heatmap_data.index)]
-    ax.set_yticklabels(y_labels)
+    y_positions = [get_row_idx(v, yvals) for v in desired_cdb]
+    x_positions = [get_col_idx(v, xvals) for v in desired_cdpro]
 
+    ax.set_yticks(y_positions)
+    ax.set_yticklabels([f"{v:.2f}" for v in desired_cdb])
+
+    ax.set_xticks(x_positions)
+    ax.set_xticklabels([f"{v:.3f}" for v in desired_cdpro])
+
+    ax.legend()
 
     latin_names = {
         "Fn": "Falco naumanni",
@@ -273,14 +282,14 @@ for bird, data in grid_results.items():
 
     full_name = latin_names.get(bird, "Unknown Species")
 
-    plt.title(r"Heatmap of Loss for $\mathit{" + full_name.replace(" ", r"\ ") + "}$", fontsize=15,fontdict={'family': 'Arial', 'size': 15})
+    plt.title(r"Heatmap of Loss for $\mathit{" + full_name.replace(" ", r"\ ") + "}$", fontsize=16,fontdict={'family': 'Arial', 'size': 15})
 
     #plt.xlabel("CDpro")
     plt.xlabel(r"$C_{D_{\mathrm{pro}}}$", fontdict={'family': 'Arial', 'size': 14})
 
     #plt.ylabel("CDb")
     plt.ylabel(r"$C_{D_{\mathrm{b}}}$",fontdict={'family': 'Arial', 'size': 14})
-    #plt.savefig(f"Heatmap of Loss for {bird}.png", dpi=500)
+    plt.savefig(f"0_update_Heatmap of Loss for {bird}.png", dpi=500)
     plt.show(block=True)
 
     results = bird, a,b
