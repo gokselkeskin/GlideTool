@@ -14,6 +14,7 @@ from openpyxl.styles import Alignment
 import sys
 import io
 
+induced_drag_factor = 1.1
 
 if sys.stdout:
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
@@ -108,10 +109,7 @@ def input_bird_data():
     # Create a dictionary
     entries = {}
 
-    note_label3 = tk.Label(root,
-                           text="This is the GlideTool created as described in 'Data-driven optimization of Pennycuick’s Flight Tool for improved polar curves of thermal soaring bird species.'",
-                           wraplength=800, justify="left")
-    note_label3.grid(row=13, column=0, columnspan=2, padx=pad_x, pady=pad_y, sticky=tk.W)
+
 
     note_label = tk.Label(root,
                           text="Please enter all the bird details in the fields above. 'Falco naumanni (Fn)' is provided as an example in one of our datasets. All birds in the dataset are also available in the dropdown menu.",
@@ -123,7 +121,10 @@ def input_bird_data():
                           wraplength=500, justify="left")
     note_label2.grid(row=15, column=0, columnspan=2, padx=pad_x, pady=pad_y, sticky=tk.W)
 
-
+    note_label3 = tk.Label(root,
+                           text=f"This GlideTool is the final product of the manuscript “Data‑driven optimization of Pennycuick’s flight tool for improved polar curves of thermal‑soaring bird species”. See the manuscript for full details on the assumptions underlying this tool.",
+                           wraplength=795, justify="left")
+    note_label3.grid(row=13, column=0, columnspan=2, padx=pad_x, pady=pad_y, sticky=tk.W)
 
     predefined_birds = {
         "Falco naumanni (Fn)": {
@@ -368,146 +369,55 @@ def input_bird_data():
 
 objective = input_bird_data()
 
+# Grid parameters
+CDBmin, CDBmax   = 0.1, 0.3
+CDpromin, CDpromax = 0.001, 0.097
+num_points       = 100
+Cdpro_scaled_grid = np.linspace(0, 1, num_points)
+Cdb_scaled_grid   = np.linspace(0, 1, num_points)
 
-baseline_parameters = {'Cdb': 0.1, 'Cdpro': 0.014}
-CDBmin = 0.1
-CDBmax = 0.3
+# pooled data from 
+global_data = []
+for bird, obj in objective.items():
+    m, Sb, Sw, B = obj['parameters'].values()
+    Vh = np.array(obj['velocities']['Horizontal'], float)
+    Vz = -np.array(obj['velocities']['Vertical'],   float)
+    Err= np.array(obj['velocities']['Vertical_error'], float)
+    for vh, vz_o, err in zip(Vh, Vz, Err):
+        global_data.append((vh, vz_o, err, m, Sb, Sw, B))
 
-CDpromin = 0.003
-CDpromax = 0.1
+# Grid‐search across all (Cdpro, Cdb) pairs
+grid_list = []
+for s_cd in Cdpro_scaled_grid:
+    Cdpro = CDpromin + s_cd * (CDpromax - CDpromin)
+    for s_db in Cdb_scaled_grid:
+        Cdb = CDBmin + s_db * (CDBmax - CDBmin)
+        preds, obs, errs = [], [], []
+        for vh, vz_o, err, m, Sb, Sw, B in global_data:
+            preds.append(Vz_pennycuick(vh, m, 9.8, 1.01, Sb, Sw, B, Cdpro, Cdb))
+            obs.append(vz_o)
+            errs.append(err)
+        preds, obs, errs = map(np.array, (preds, obs, errs))
+        loss = np.sqrt(np.sum((obs - preds)**2 / errs**2) / np.sum(1/errs**2))
+        grid_list.append({'Cdpro': Cdpro, 'Cdb': Cdb, 'loss': loss})
 
-optimized_results = []
-best_fitting_parameters_per_bird = {}
+# Find the global minimum
+df_grid   = pd.DataFrame(grid_list)
+best_idx  = df_grid['loss'].idxmin()
+best_row  = df_grid.loc[best_idx]
+best_Cdpro, best_Cdb, best_loss = best_row['Cdpro'], best_row['Cdb'], best_row['loss']
 
-induced_drag_factor = 1.1
+print(f"Global best C_D_pro = {best_Cdpro:.5f}")
+print(f"Global best C_D_b   = {best_Cdb:.5f}")
+print(f"Minimum loss        = {best_loss:.4f}")
 
-
-
-def wrapper_multiple(p, objective, baseline_parameters, debug=False, penalty_weight=0.01):
-    loss_list = []
-    for bird, objective_dict in objective.items():
-        loss = wrapper(p, objective_dict=objective_dict, baseline_parameters=baseline_parameters, g=9.8, rho=1.01, debug=debug, penalty_weight=penalty_weight)
-        loss_list.append(loss)
-        if bird not in best_fitting_parameters_per_bird or loss < best_fitting_parameters_per_bird[bird]['loss']:
-            best_fitting_parameters_per_bird[bird] = {
-                'Cdb': CDBmin + p[0] * (CDBmax - CDBmin),
-                'Cdpro': CDpromin + p[1] * (CDpromax - CDpromin),
-                'loss': loss
-            }
-    overall_loss = np.mean(loss_list)
-    return overall_loss
-
-def plot_debug(p, loss, context):
-    global objective
-    for bird, objective_dict in objective.items():
-        m = objective_dict['parameters']['m']
-        Sb = objective_dict['parameters']['Sb']
-        Sw = objective_dict['parameters']['Sw']
-        B = objective_dict['parameters']['B']
-        Cdb = CDBmin + p[0] * (CDBmax - CDBmin)
-        Cdpro = CDpromin + p[1] * (CDpromax - CDpromin)
-
-        new_results = f'{bird}, {Cdpro:.2g}, {Cdb:.2g}'
-        optimized_results.append(new_results)
-
-    print(p, loss, msg_dict[context])
-
-
-def wrapper(p, objective_dict, baseline_parameters, g=9.8, rho=1.01, debug=False, penalty_weight=0.01):
-    m = objective_dict['parameters']['m']
-    Sb = objective_dict['parameters']['Sb']
-    Sw = objective_dict['parameters']['Sw']
-    B = objective_dict['parameters']['B']
-
-    Cdb = CDBmin + p[0] * (CDBmax - CDBmin)
-    Cdpro = CDpromin + p[1] * (CDpromax - CDpromin)
-
-    delta = 1
-    e = 1
-
-    vz_array = []
-    Vh_array = np.array(objective_dict["velocities"]['Horizontal']).astype(float)
-    for i in Vh_array:
-        vz_array.append(Vz_pennycuick(i, m=m, g=g, rho=rho, Sb=Sb, Sw=Sw, B=B, Cdpro=Cdpro, Cdb=Cdb, delta=delta, e=e))
-    vz_array_objective = - np.array(objective_dict["velocities"]['Vertical']).astype(float)
-    vz_array_err_objective = np.array(objective_dict["velocities"]['Vertical_error']).astype(float)
-    vz_array = np.array(vz_array)
-
-    # Calculate the primary loss (root-mean-square error)
-    loss = np.sqrt(np.sum((vz_array_objective - vz_array) ** 2 / vz_array_err_objective) / np.sum(1 / vz_array_err_objective))
-
-    # Apply a weighted penalty to prioritize Cdpro optimization
-    # Here, we'll give Cdpro 3x the weight of Cdb
-    penalty_weight_cdpro = penalty_weight * 3
-    penalty_weight_cdb = penalty_weight
-
-    # Compute soft penalties
-    soft_penalty_cdpro = penalty_weight_cdpro * ((Cdpro - CDpromin) ** 2 + (Cdpro - CDpromax) ** 2) / ((CDpromax - CDpromin) ** 2)
-    soft_penalty_cdb = penalty_weight_cdb * ((Cdb - CDBmin) ** 2 + (Cdb - CDBmax) ** 2) / ((CDBmax - CDBmin) ** 2)
-
-    # Combine the loss with the penalties
-    total_loss = loss + soft_penalty_cdpro + soft_penalty_cdb
-
-    return total_loss
-
-def wrapper_both(p):
-    return wrapper_multiple([p[0], p[1]], objective, baseline_parameters)
-
-def optimize_cdpro_only(objective, baseline_parameters, Cdb_fixed):
-    def wrapper_cdpro_only(p_cdpro):
-        p = [Cdb_fixed, p_cdpro[0]]
-        return wrapper_multiple(p, objective, baseline_parameters)
-
-    initial_guess = [(CDpromax + CDpromin) / 2]
-    bounds = [(0, 1)]
-    result = minimize(wrapper_cdpro_only, initial_guess, bounds=bounds)
-    return result.x[0]
-
-def optimize_cdb_only(objective, baseline_parameters, Cdpro_fixed):
-    def wrapper_cdb_only(p_cdb):
-        p = [p_cdb[0], Cdpro_fixed]  # Fix Cdpro, optimize only Cdb
-        return wrapper_multiple(p, objective, baseline_parameters)
-
-    initial_guess = [(CDBmax + CDBmin) / 2]
-    bounds = [(0, 1)]
-    result = minimize(wrapper_cdb_only, initial_guess, bounds=bounds)
-    return result.x[0]  # Optimized Cdb
-
-def full_optimization_process(objective, baseline_parameters):
-    Cdb_fixed = (CDBmax + CDBmin) / 2
-
-    # Stage 1: Optimize Cdpro
-    optimized_Cdpro = optimize_cdpro_only(objective, baseline_parameters, Cdb_fixed)
-
-    # Stage 2: Optimize Cdb
-    optimized_Cdb = optimize_cdb_only(objective, baseline_parameters, optimized_Cdpro)
-
-    return optimized_Cdb, optimized_Cdpro
+# create best_parameters for EVERY bird
+best_parameters = {
+    bird: {'Cdpro': best_Cdpro, 'Cdb': best_Cdb, 'loss': best_loss}
+    for bird in objective
+}
 
 
-result = minimize(wrapper_multiple, args=(objective, baseline_parameters), x0=[(CDBmax + CDBmin) / 2, 0.01],
-                  method="CG")
-optimized_Cdb, optimized_Cdpro = result.x
-# Optimized Cdb
-optimized_Cdb_final =CDBmin + optimized_Cdb * (CDBmax - CDBmin)
-optimized_Cdpro_final =CDpromin + optimized_Cdpro * (CDpromax - CDpromin)
-# Run the full optimization process
-#optimized_Cdb, optimized_Cdpro = full_optimization_process(objective, baseline_parameters)
-
-print(f"Optimized Cdb: {CDBmin + optimized_Cdb * (CDBmax - CDBmin)}")
-print(f"Optimized Cdpro: {CDpromin + optimized_Cdpro  * (CDpromax - CDpromin)}")
-
-my_bounds = [[0, 1], [0, 1]]
-x0 = np.array([0.5, 0.5])
-msg_dict = {0: "minimum detected in the annealing process.",
-            1: "detection occurred in the local search process.",
-            2: "detection done in the dual annealing process."}
-
-penalty_weight = 0.01
-
-best_parameters = {}
-for bird in best_fitting_parameters_per_bird:
-    best_parameters[bird] = best_fitting_parameters_per_bird[bird]
 
 def closed_form_polar_curve(Vt, m, g, Sb, Sw, e, rho, delta, B, Cdpro, Cdb):
     AR = B ** 2 / Sw
@@ -538,6 +448,18 @@ def optimal_strategy(Vt, m, g, Sb, Sw, e, rho, delta, B, Cdpro, Cdb):
     return climbrate
 
 def result(objective, best_parameters, g=9.8, rho=1.01):
+    multi = len(objective) > 1
+    if multi:
+        combined_csv = os.path.join(folder_path, "combined_calculation.csv")
+        header = [
+            "Input: Bird Name","Input: Mass(kg)","Input: Wingspan(m)","Input: Wing Area(m²)","Input: Body Frontal Area(m²)","Output: Speed at Best Glide (m/s)", "Output: Sink at Best Glide (m/s)", "Output: Best Glide Ratio", "Output: Speed at Min Sink (m/s)",
+                          "Output: Min Sink Speed (m/s)","Output: Cdb", "Output: Cdpro", "Output: Loss"
+        ]
+        need_header = not os.path.exists(combined_csv)
+        csv_file = open(combined_csv, "a+", newline="", encoding="utf-8-sig")
+        csv_writer = csv.writer(csv_file)
+        if need_header:
+            csv_writer.writerow(header)
     for bird, objective_dict in objective.items():
         m = objective_dict['parameters']['m']
         Sb = objective_dict['parameters']['Sb']
@@ -648,36 +570,40 @@ def result(objective, best_parameters, g=9.8, rho=1.01):
 
         plt.show(block=True)
 
-        results = bird,m,B,Sw,Sb,best_glide_speed_0,best_glide_y, best_glide_ratio, speed_at_min_sink, min_sink_speed,Cdb, Cdpro,loss
 
-        if preferences['save_csv']:
-            save_csv = os.path.join(folder_path, f"{bird}_polar_results.csv")
-            header = ["Input: Bird Name","Input: Mass(kg)","Input: Wingspan(m)","Input: Wing Area(m²)","Input: Body Frontal Area(m²)","Output: Speed at Best Glide (m/s)", "Output: Sink at Best Glide (m/s)", "Output: Best Glide Ratio", "Output: Speed at Min Sink (m/s)",
-                      "Output: Min Sink Speed (m/s)","Output: Cdb", "Output: Cdpro", "Output: Loss"]
+        row = bird,m,B,Sw,Sb,best_glide_speed_0,best_glide_y, best_glide_ratio, speed_at_min_sink, min_sink_speed,Cdb, Cdpro,loss
 
-            with open(save_csv, "a+", newline="", encoding="utf-8-sig") as result_updater:
-                csv_writer = csv.writer(result_updater)
-                csv_writer.writerow(header)
-                csv_writer.writerow(results)
-                result_updater.close()
-                messagebox.showinfo("Save Successful", f"Successfully saved CSV data to: {save_csv}")
+        if objective_dict["preferences"]["save_csv"]:
+            if multi:
+                csv_writer.writerow(row)
+            else:
+                save_csv = os.path.join(folder_path, f"{bird}_polar_results.csv")
+                header = ["Input: Bird Name","Input: Mass(kg)","Input: Wingspan(m)","Input: Wing Area(m²)","Input: Body Frontal Area(m²)","Output: Speed at Best Glide (m/s)", "Output: Sink at Best Glide (m/s)", "Output: Best Glide Ratio", "Output: Speed at Min Sink (m/s)",
+                          "Output: Min Sink Speed (m/s)","Output: Cdb", "Output: Cdpro", "Output: Loss"]
+
+                with open(save_csv, "a+", newline="", encoding="utf-8-sig") as result_updater:
+                    csv_writer = csv.writer(result_updater)
+                    csv_writer.writerow(header)
+                    csv_writer.writerow(row)
+                    result_updater.close()
+                    messagebox.showinfo("Save Successful", f"Successfully saved CSV data to: {save_csv}")
 
         if preferences['save_excel']:
             save_xlsx = os.path.join(folder_path, f"{bird}_polar_results.xlsx")
             data_results = {
-                "Bird Name": [results[0]],
-                "Mass(kg)": [results[1]],
-                "Wingspan(m)": [results[2]],
-                "Wing Area(m²)": [results[3]],
-                "Body Frontal Area(m²)": [results[4]],
-                "Speed at Best Glide (m/s)": [results[5]],
-                "Sink at Best Glide (m/s)": [results[6]],
-                "Best Glide Ratio": [results[7]],
-                "Speed at Min Sink (m/s)": [results[8]],
-                "Min Sink Speed (m/s)": [results[9]],
-                "Cdb": [results[10]],
-                "Cdpro": [results[11]],
-                "Loss": [results[12]]
+                "Bird Name": [row[0]],
+                "Mass(kg)": [row[1]],
+                "Wingspan(m)": [row[2]],
+                "Wing Area(m²)": [row[3]],
+                "Body Frontal Area(m²)": [row[4]],
+                "Speed at Best Glide (m/s)": [row[5]],
+                "Sink at Best Glide (m/s)": [row[6]],
+                "Best Glide Ratio": [row[7]],
+                "Speed at Min Sink (m/s)": [row[8]],
+                "Min Sink Speed (m/s)": [row[9]],
+                "Cdb": [row[10]],
+                "Cdpro": [row[11]],
+                "Loss": [row[12]]
             }
 
             results_df = pd.DataFrame(data_results)
@@ -694,7 +620,7 @@ def result(objective, best_parameters, g=9.8, rho=1.01):
 
 
             worksheet.merge_cells('A1:S1')  # Merges cells for input columns
-            worksheet['A1'] = "#This is the GlideTool created as described in 'Data-driven optimization of Pennycuick’s Flight Tool for improved polar curves of thermal soaring bird species.'"
+            worksheet['A1'] = "#This is the GlideToolV1"
 
 
             worksheet.merge_cells('A2:E2')  # Merges cells for input columns
