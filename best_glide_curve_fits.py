@@ -63,13 +63,13 @@ def Vz_pennycuick(
     )
 
 
-with open('species_dict.pkl', 'rb') as f:
+with open('species_dict_updated.pkl', 'rb') as f:
     full_objective = pickle.load(f)
 
 #####select more species or load all species
-keys_to_copy = ["Fn"]
-objective = {k: full_objective[k] for k in keys_to_copy}
-# objective = full_objective
+#keys_to_copy = ["Cc"]
+#objective = {k: full_objective[k] for k in keys_to_copy}
+objective = full_objective
 
 # Define Grid Search Ranges
 CDBmin, CDBmax = 0.1, 0.3
@@ -186,10 +186,6 @@ for bird, df in grid_results.items():
     velocity_array = np.linspace(5, 20, 50)
 
 
-    # ------------------------------------------------
-    # (C) Function to compute Weighted-RMSE "loss"
-    #     at the actual measurement points only
-    # ------------------------------------------------
     def compute_loss(cdpro_val, cdb_val):
 
         pred_vz = np.array([
@@ -204,16 +200,11 @@ for bird, df in grid_results.items():
             )
             for vh in Vh_array
         ])
-        # Weighted RMSE, comparing predicted (pred_vz) to observed (vz_array_objective)
 
         return np.sqrt(
             np.sum((vz_array_objective - pred_vz) ** 2 / vz_array_err_objective)
             / np.sum(1 / vz_array_err_objective)
         )
-
-
-    # (D) Plot "Original" polar
-
 
 
     for i in range(num_new_points):
@@ -278,7 +269,7 @@ for bird, df in grid_results.items():
     ax.grid(True)
     ax.legend()
     # plt.savefig(f"Glide Polar Variations for {bird}.png", dpi=500)
-    # plt.savefig(f"Glide Polar Variations for {bird}.svg")
+    plt.savefig(f"Glide Polar Variations for {bird}_updated.svg")
     plt.show(block=True)
 
     for i in range(num_new_points):
