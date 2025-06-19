@@ -12,7 +12,7 @@ from collections import defaultdict
 from scipy.optimize import curve_fit
 from collections import defaultdict, Counter
 
-
+# --- Aerodynamic and helper functions ---
 def linear_func(x, a, b):
     return a * x + b
 
@@ -55,7 +55,7 @@ keys_to_copy = ["An","Ar","Gf_W","Gh","Vg","Cc","Ge","Fn"]
 objective = {key: full_objective[key] for key in keys_to_copy}
 
 
-#Grid parameters
+# --- Grid parameters ---
 CDBmin, CDBmax = 0.1, 0.3
 CDpromin, CDpromax = 0.001, 0.097
 num_points = 100
@@ -74,23 +74,31 @@ for bird, obj in objective.items():
     for vh, vz_o, err in zip(Vh, Vz, Err):
         global_data.append((vh, vz_o, err, m, Sb, Sw, B))
 
+grid_results = {'summed': []}
+
 for Cd_s in Cdpro_scaled_grid:
     Cdpro = CDpromin + Cd_s * (CDpromax - CDpromin)
     for Db_s in Cdb_scaled_grid:
         Cdb = CDBmin + Db_s * (CDBmax - CDBmin)
-        preds, obs, errs = [], [], []
-        for vh, vz_o, err, m, Sb, Sw, B in global_data:
-            preds.append(Vz_pennycuick(vh, m, 9.8, 1.01, Sb, Sw, B, Cdpro, Cdb))
-            obs.append(vz_o)
-            errs.append(err)
-        preds = np.array(preds)
-        obs   = np.array(obs)
-        errs  = np.array(errs)
-        loss = np.sqrt(np.sum((obs - preds)**2 / errs**2) / np.sum(1 / errs**2))
-        grid_results['pooled'].append({'Cdpro': Cdpro, 'Cdb': Cdb, 'loss': loss})
+
+        total_loss = 0
+        for bird, obj in objective.items():
+            m, Sb, Sw, B = obj['parameters']['m'], obj['parameters']['Sb'], obj['parameters']['Sw'], obj['parameters'][
+                'B']
+            Vh = np.array(obj['velocities']['Horizontal'], float)
+            Vz = -np.array(obj['velocities']['Vertical'], float)
+            Err = np.array(obj['velocities']['Vertical_error'], float)
+
+            preds = Vz_pennycuick(Vh, m, 9.8, 1.01, Sb, Sw, B, Cdpro, Cdb)
+            loss = np.sqrt(np.sum((Vz - preds) ** 2 / Err ** 2) / np.sum(1 / Err ** 2))
+
+            total_loss += loss
+
+        grid_results['summed'].append({'Cdpro': Cdpro, 'Cdb': Cdb, 'loss': total_loss})
 
 
-df = pd.DataFrame(grid_results['pooled'])
+df = pd.DataFrame(grid_results['summed'])
+
 heatmap_data = df.pivot_table(values='loss', index='Cdb', columns='Cdpro')
 
 opt_idx = df['loss'].idxmin()
@@ -108,15 +116,20 @@ min_y_values = min_loss_indices[valid_mask]
 # fit line
 popt, _ = curve_fit(linear_func, min_x_values, min_y_values)
 a, b = popt
+# prepare line
 y_min, y_max = heatmap_data.index.min(), heatmap_data.index.max()
 fitted_y = np.linspace(y_min, y_max, 200)
 fitted_x = (fitted_y - b) / a
+
+# --- Identify most frequent minima ---
 cdb_counts = Counter(min_y_values)
 most_cdb, freq = cdb_counts.most_common(1)[0]
 print(f"Most frequent column-minimum Cdb = {most_cdb:.3f} (in {freq}/{len(min_y_values)} columns)")
-#heatmap
+
+
+# --- Plot heatmap + overlays ---
 plt.figure(figsize=(8,7))
-ax = sns.heatmap(heatmap_data, cmap='cividis_r', vmin=0, vmax=1.5, cbar_kws={'label':'Loss'})
+ax = sns.heatmap(heatmap_data, cmap='cividis_r', vmin=0, vmax=10, annot_kws={"size": 14}, cbar_kws={'label':'Loss (m/s)'})
 # invert y-axis to start from smallest Cdb
 ax.set_ylim(ax.get_ylim()[::-1])
 # Pennycuick default marker
@@ -128,10 +141,12 @@ norm_x_pts = (min_x_values - heatmap_data.columns.min())/(heatmap_data.columns.m
 norm_y_pts = (min_y_values - heatmap_data.index.min())/(heatmap_data.index.max()-heatmap_data.index.min())*len(heatmap_data.index)
 #ax.scatter(norm_x_pts, norm_y_pts, s=50, c='blue', marker='o', label='Column minima')
 
+# overlay filtered linear fit
 norm_x = (fitted_x - heatmap_data.columns.min()) / (heatmap_data.columns.max() - heatmap_data.columns.min()) * len(heatmap_data.columns)
 norm_y = (fitted_y - heatmap_data.index.min()) / (heatmap_data.index.max() - heatmap_data.index.min()) * len(heatmap_data.index)
 ax.plot(norm_x, norm_y, '--', lw=2, color='black', label='Linear Fit')
 
+# --- Set specific tick labels ---
 desired_cdb = [0.10, 0.15, 0.20, 0.25, 0.30]
 y_positions = [np.argmin(np.abs(heatmap_data.index - v)) for v in desired_cdb]
 ax.set_yticks(y_positions)
@@ -146,8 +161,13 @@ ax.set_xticklabels([f"{v:.3f}" for v in desired_cdpro], rotation=45)
 ax.set_xlabel(r"$C_{D_{pro}}$")
 ax.set_ylabel(r"$C_{D_{b}}$")
 ax.legend()
-plt.title("Heatmap of General Fit (Unacc Curve)")
+# block until closed
+plt.title("Heatmap of General Fit (steady gliding)")
+#plt.title("Heatmap of General Fit")
+
 plt.savefig("Heatmap_acc.svg")
+#plt.savefig("Heatmap_all.svg")
+
 plt.show(block=True)
 
 print("\nOriginal (x, y) pairs:")
