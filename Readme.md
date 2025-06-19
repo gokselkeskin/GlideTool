@@ -15,3 +15,11 @@ GlideTool.py is the source code of GlideTool.exe.
 There are two .pkl files: one from all original gliding points and the second from only steady gliding points.
 
 To use the Python files, please copy the scripts and the .pkl file to your environment, then run the scripts.
+
+GlideTool Instructions
+
+The program requires several inputs, including mass, body frontal area, wing area, wingspan, and observed gliding points with their horizontal and vertical components.
+Species studied in the associated manuscript are available in the dropdown menu.
+There are several options to save the figures in different formats: as images, CSV files, or Excel spreadsheets.
+
+Note: This program operates based on Pennycuick's gliding formulas, using all of the original assumptions.
